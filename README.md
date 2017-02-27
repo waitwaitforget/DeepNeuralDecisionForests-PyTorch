@@ -1,6 +1,6 @@
 # DeepNeuralDecisionForests-PyTorch
 PyTorch implementation of Deep Neural DecsionForests.
-# For testing run:
+# Run for test
 python chenck.py
 # Some problems that need to fix
 1. Running out of memory when using GPU.
