@@ -9,13 +9,13 @@ import torch.optim as optim
 from   data_util import load_mnist
 
 ################ Definition #########################
-DEPTH = 3  # Depth of a tree
+DEPTH = 4  # Depth of a tree
 N_LEAF = 2 ** (DEPTH + 1)  # Number of leaf node
 N_LABEL = 10  # Number of classes
 N_TREE = 1  # Number of trees (ensemble)
 N_BATCH = 128  # Number of data points per mini-batch
 
-cuda = 0
+cuda = 1
 
 class DeepNeuralDecisionForest(nn.Module):
     def __init__(self, w4_e, w_d_e, p_keep_conv, p_keep_hidden):
@@ -116,6 +116,22 @@ def compute_mu(flat_decision_p_e, nsamples, nleaves):
             mu_e = mu_e_update
     return mu_e
 
+def compute_mu2(input):
+    lastOffset = 0
+    nextOffset = N_TREE
+    lastTensor = input[:,0:N_TREE]
+    for i in range(DEPTH+1):
+        lastWidth = (1<<i) * N_TREE
+        lastOffset, midOffset, nextOffset = nextOffset, nextOffset + lastWidth, nextOffset + lastWidth * 2
+        leftTensor = input[:, lastOffset:midOffset]
+        rightTensor= input[:, midOffset:nextOffset]
+
+        leftProduct = lastTensor * leftTensor
+        rightProduct = (1 - lastTensor) * rightTensor
+
+        lastTensor = torch.cat((leftProduct, rightProduct), 1)
+    return lastTensor  
+
 # Define p(y|x)
 def compute_py_x(mu_e, leaf_p_e):
     py_x_e = []
@@ -170,19 +186,16 @@ def train(model, loss, optimizer, X_val, Y_val, leaf_p_e):
 
     decision_p_e = model.forward(X_val)
 
-    flat_decision_p_e = []
+    mu_e = []
 
     for decision_p in decision_p_e:
-        decision_p_comp = 1 - decision_p
-
-        decision_p_pack = torch.cat((decision_p, decision_p_comp), 1)
-
-        flat_decision_p = decision_p_pack.view(-1)
-        flat_decision_p_e.append(flat_decision_p)
+        mu = compute_mu2(decision_p)
+        mu_e.append(mu)
     # compute mu
-    mu_e = compute_mu(flat_decision_p_e, nsamples, nleaves)
+    #mu_e = compute_mu(flat_decision_p_e, nsamples, nleaves)
     #mu_e = [Variable(torch.randn(128,16), requires_grad=True)]
     # compute py_x
+    
     py_x = compute_py_x(mu_e, leaf_p_e)
     # compute loss
     
@@ -203,18 +216,15 @@ def predict(model, X_val, leaf_p_e, mode = 1):
     nsamples = X_val.size(0)
     nleaves = leaf_p_e[0].size(0)
 
-    for decision_p in decision_p_e:
-        decision_p_comp = 1 - decision_p
-        decision_p_pack = torch.cat((decision_p, decision_p_comp), 1)
+    mu_e = []
 
-        flat_decision_p = decision_p_pack.view(-1)
-        flat_decision_p_e.append(flat_decision_p)
-    # compute mu
-    mu_e = compute_mu(flat_decision_p_e, nsamples, nleaves)
+    for decision_p in decision_p_e:
+        mu = compute_mu2(decision_p)
+        mu_e.append(mu)
     # compute py_x
     py_x = compute_py_x(mu_e, leaf_p_e)
     if mode == 1:
-        return py_x.data.numpy().argmax(axis=1)
+        return py_x.data.cpu().numpy().argmax(axis=1)
     elif mode == 2:
         return py_x, mu_e
 
@@ -223,15 +233,11 @@ def batch_forward(model, X_val, leaf_p_e):
     decision_p_e = model.forward(X_val)
     nsamples = X_val.size(0)
     nleaves = leaf_p_e[0].size(0)
-    flat_decision_p_e = []
+    mu_e = []
 
     for decision_p in decision_p_e:
-        decision_p_comp = 1 - decision_p
-        decision_p_pack = torch.cat((decision_p, decision_p_comp), 1)
-        flat_decision_p = decision_p_pack.view(-1)
-        flat_decision_p_e.append(flat_decision_p)
-    # compute mu
-    mu_e = compute_mu(flat_decision_p_e, nsamples, nleaves)
+        mu = compute_mu2(decision_p)
+        mu_e.append(mu)
     #mu_e = [Variable(torch.randn(128,16), requires_grad=True)]
     # compute py_x
     py_x = compute_py_x(mu_e, leaf_p_e)
@@ -269,7 +275,7 @@ def main():
     print('# parameter initialization')
     for i in range(N_TREE):
         w4_ensemble.append(init_weights([128 * 3 * 3, 625]))
-        w_d_ensemble.append(init_prob_weights([625, N_LEAF], -1, 1))
+        w_d_ensemble.append(init_prob_weights([625, 100], -1, 1))
         pi = init_prob_weights([N_LEAF, N_LABEL], 0, 1)
         pi = softmax.forward(Variable(pi))
         if cuda:
@@ -295,10 +301,6 @@ def main():
     teX = torch.from_numpy(teX).float()
     trY = torch.from_numpy(trY).long()
     trY_onehot = torch.from_numpy(trY_onehot).long()
-
-    trX = trX[:1024]
-    trY = trY[:1024]
-    trY_onehot = trY_onehot[:1024]
 
     n_examples = len(trX)
 
